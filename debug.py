@@ -1,8 +1,8 @@
-"""The UCB module contains functions specific to 61A projects at UC Berkeley."""
-
 import functools
 import inspect
 import re
+import logging
+from logging import DEBUG, INFO, WARN, ERROR
 
 
 _PREFIX = ''
@@ -14,6 +14,9 @@ def trace(fn):
     def compute_something(x, y):
         # function body
     """
+    def log(message):
+        dbg(_PREFIX + re.sub('\n', '\n' + _PREFIX, str(message)))
+        
     @functools.wraps(fn)
     def wrapped(*args, **kwds):
         global _PREFIX
@@ -34,17 +37,37 @@ def trace(fn):
     return wrapped
 
 
-def log(message):
-    """Print an indented message (used with trace)."""
-    line = _PREFIX + re.sub('\n', '\n' + _PREFIX, str(message))
-    if log.out == 'stdout': print(line)
-    else: log.out.write(line + '\n')
+class LogFormatter(logging.Formatter):
 
-log.out = 'stdout'
+    formats = {
+        DEBUG: ("%(module)s.%(funcName)s, L%(lineno)s:\n  %(msg)s"),
+        INFO:  "%(msg)s",
+        WARN:  "WARNING: %(msg)s",
+        ERROR: "ERROR: %(msg)s"
+    }
+
+    def format(self, record):
+        dct = record.__dict__
+        fmt = LogFormatter.formats.get(record.levelno, self._fmt)
+        return fmt % dct
 
 
-def log_current_line():
-    """Print information about the current line of code."""
-    frame = inspect.stack()[1]
-    log('Current line: File "{f[1]}", line {f[2]}, in {f[3]}'.format(f=frame))
+logLevel = logging.DEBUG
+logFormat = LogFormatter()
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logLevel)
+
+logHandler = logging.StreamHandler()
+logHandler.setLevel(logging.DEBUG)
+logHandler.setFormatter(logFormat)
+
+logger.addHandler(logHandler)
+
+dbg = logger.debug
+info = logger.info
+warn = logger.warning
+
+
+def setloglevel(level):
+    logger.setLevel(level)

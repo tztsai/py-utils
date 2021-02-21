@@ -72,3 +72,32 @@ def binding(**kwds):
     finally:
         [G.pop(k) for k in new_binds]
         G.update(old_binds)
+
+
+class BracketTracker:
+    
+    parentheses = ')(', '][', '}{'
+    close_pars, open_pars = zip(*parentheses)
+    par_map = dict(parentheses)
+
+    def __init__(self):
+        self.stk = []
+
+    def push(self, par, pos):
+        self.stk.append((par, pos))
+
+    def pop(self, par):
+        if self.stk and self.stk[-1][0] == self.par_map[par]:
+            self.stk.pop()
+        else:
+            self.stk.clear()
+            raise SyntaxError('bad parentheses')
+
+    def next_insertion(self, line):
+        "Track the brackets in the line and return the appropriate pooint of the nest insertion."
+        for i, c in enumerate(line):
+            if c in self.open_pars:
+                self.push(c, i)
+            elif c in self.close_pars:
+                self.pop(c)
+        return self.stk[-1][1] + 1 if self.stk else 0
