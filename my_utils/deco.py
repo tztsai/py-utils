@@ -44,24 +44,6 @@ def memo(f):  # a decorator to improve performance
 
 
 @decorator
-def trace(f):  # a decorator for debugging
-    "Print info before and after the call of a function."
-    indent = '  '
-    trace.level = 0
-    def _f(*args):
-        signature = f"{f.__name__}({', '.join(map(repr, args))})"
-        print(indent * trace.level + f'---> {signature}')
-        trace.level += 1
-        try:
-            result = f(*args)
-        finally:
-            trace.level -= 1
-        print(indent * trace.level + f'<--- {signature} === {result}')
-        return result
-    return _f
-
-
-@decorator
 def disabled(f):
     "Assign a decorator to disabled to disable it."
     return f

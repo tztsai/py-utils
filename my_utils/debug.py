@@ -5,7 +5,6 @@ import logging
 from logging import DEBUG, INFO, WARN, ERROR
 
 
-_PREFIX = ''
 def trace(fn):
     """A decorator that prints a function's name, its arguments, and its return
     values each time the function is called. For example,
@@ -14,22 +13,24 @@ def trace(fn):
     def compute_something(x, y):
         # function body
     """
+    indent = ''
+    
     def log(message):
-        dbg(_PREFIX + re.sub('\n', '\n' + _PREFIX, str(message)))
+        dbg(indent + re.sub('\n', '\n' + indent, str(message)))
         
     @functools.wraps(fn)
     def wrapped(*args, **kwds):
-        global _PREFIX
+        nonlocal indent
         reprs = [repr(e) for e in args]
         reprs += [repr(k) + '=' + repr(v) for k, v in kwds.items()]
         log('{0}({1})'.format(fn.__name__, ', '.join(reprs)) + ':')
-        _PREFIX += '    '
+        indent += '    '
         try:
             result = fn(*args, **kwds)
-            _PREFIX = _PREFIX[:-4]
+            indent = indent[:-4]
         except Exception as e:
             log(fn.__name__ + ' exited via exception')
-            _PREFIX = _PREFIX[:-4]
+            indent = indent[:-4]
             raise
         # Here, print out the return value.
         log('{0}({1}) -> {2}'.format(fn.__name__, ', '.join(reprs), result))
