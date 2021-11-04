@@ -1,8 +1,10 @@
+import os
 import sys
 import inspect
 import signal
 import code
 import contextlib
+from multiprocessing import Pool
 
 
 def main(fn):
@@ -65,7 +67,6 @@ def binding(**kwds):
             old_binds[k] = G[k]
         else:
             new_binds[k] = v
-
     try:
         G.update(kwds)
         yield  # Stuff within the context gets run here.
@@ -74,30 +75,50 @@ def binding(**kwds):
         G.update(old_binds)
 
 
-class BracketTracker:
+def pmap(f, lst, jobs=None):
+    if jobs is None:
+        jobs = os.cpu_count()
+    l = int(len(lst) / jobs + 1 - 1e-8)
+    splits = [lst[i*l:(i+1)*l] for i in range(jobs)]
+    with Pool(jobs) as pool:
+        pool.map(f, splits)
     
-    parentheses = ')(', '][', '}{'
-    close_pars, open_pars = zip(*parentheses)
-    par_map = dict(parentheses)
 
-    def __init__(self):
-        self.stk = []
+class Default:
+    """Change to the default value if it is set to None,
+       used as a class attribute."""
+    placeholder = None
 
-    def push(self, par, pos):
-        self.stk.append((par, pos))
+    def __init__(self, default):
+        self.default = self.value = default
 
-    def pop(self, par):
-        if self.stk and self.stk[-1][0] == self.par_map[par]:
-            self.stk.pop()
+    def __set__(self, obj, value):
+        if value is self.placeholder:
+            self.value = self.default
         else:
-            self.stk.clear()
-            raise SyntaxError('bad parentheses')
+            self.value = value
 
-    def next_insertion(self, line):
-        "Track the brackets in the line and return the appropriate pooint of the nest insertion."
-        for i, c in enumerate(line):
-            if c in self.open_pars:
-                self.push(c, i)
-            elif c in self.close_pars:
-                self.pop(c)
-        return self.stk[-1][1] + 1 if self.stk else 0
+    def __get__(self, obj, type=None):
+        return self.value
+
+
+class IsInstance:
+
+    def __init__(self, ns=None):
+        if ns is None:
+            self.ns = globals()
+        else:
+            self.ns = ns
+
+    def __getattr__(self, type):
+        ns = super().__getattribute__('ns')
+        type = eval(type, ns)
+        if hasattr(type, '__package__'):
+            return IsInstance(type.__dict__)
+        else:
+            return lambda *args: all(isinstance(arg, type)
+                                     for arg in args)
+
+    def __call__(self, *types):
+        return lambda *args: all(isinstance(arg, types)
+                                 for arg in args)
