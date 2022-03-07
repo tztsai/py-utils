@@ -5,6 +5,17 @@ import logging
 from logging import DEBUG, INFO, WARN, ERROR
 
 
+def loadDebugger():
+    exec(
+"""
+import debugpy
+debugpy.listen(5678)
+print('Waiting for VSCode debugger connection...')
+debugpy.wait_for_client()
+print('VSCode debugger connected.')
+""", globals())
+
+
 def trace(fn):
     """A decorator that prints a function's name, its arguments, and its return
     values each time the function is called. For example,
@@ -71,4 +82,6 @@ warn = logger.warning
 
 
 def setloglevel(level):
+    if type(level) is str:
+        level = level.upper()
     logger.setLevel(level)

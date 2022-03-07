@@ -1,5 +1,5 @@
 from time import time
-from functools import update_wrapper
+from functools import update_wrapper, wraps
 # When you use a decorator to define the function, the original function is
 # shadowed by the function returned by the decorator. This causes that if you
 # call the "help" function upon the decorated function, the info it displays is
@@ -59,3 +59,15 @@ def timer(f):
         print("time elapsed:", end - start)
         return result
     return _f
+
+
+def override(cls, name=None):
+    @decorator
+    def deco(method):
+        nonlocal name
+        if name is None:
+            name = method.__name__
+        setattr(cls, '_overrid_'+name, getattr(cls, name))
+        setattr(cls, name, method)
+        return method
+    return deco
