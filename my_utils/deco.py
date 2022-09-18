@@ -16,12 +16,12 @@ def decorator(dec):
     arguments, when the first of them is non-callable. """
     def _dec(*args, **kwargs):
         "This will be displayed if the second update_wrapper is absent."
-        assert args, "no arguments provided to the decorator"
         if not callable(args[0]):
             return partial(dec, *args, **kwargs)  # return another decorator
-        assert len(args) == 1 and not kwargs, "too many arguments provided to the decorator"
-        return update_wrapper(dec(args[0]), args[0])  # update_wrapper returns the wrapper
-    return update_wrapper(_dec, dec)
+        assert len(args) == 1, "too many arguments provided to the decorator"
+        assert not kwargs, "keyword arguments are not allowed for a decorator"
+        return update_wrapper(dec(args[0]), args[0])
+    return update_wrapper(_dec, dec)  # update_wrapper returns the wrapper
 
 
 @decorator
@@ -79,13 +79,13 @@ def override(cls, name=None):
         return method
     return deco
 
-
-class TraceLocals:
+@decorator
+class trace_locals:
     """ A decorator to trace the local variables of a function after it returns. """
     
     def __init__(self, func):
         self._locals = {}
-        self.func = func
+        self._func = func
 
     def __call__(self, *args, **kwargs):
         def tracer(frame, event, arg):
@@ -96,18 +96,14 @@ class TraceLocals:
         sys.setprofile(tracer)
         try:
             # trace the function call
-            res = self.func(*args, **kwargs)
+            res = self._func(*args, **kwargs)
         finally:
             # disable tracer and replace with old one
             sys.setprofile(None)
         return res
 
-    def clear_locals(self):
-        self._locals = {}
-
-    @property
-    def locals(self):
-        return self._locals
+    def __getitem__(self, key):
+        return self._locals[key]
 
 
 class Profile:
@@ -139,3 +135,22 @@ def timed(fn, name=None):
         with Profile(name):
             return fn(*args, **kwds)
     return wrapper
+
+
+if __name__ == '__main__':
+    import unittest
+    
+    class TestDecorators(unittest.TestCase):
+        def test_trace_locals(self):
+            @trace_locals
+            def f(x):
+                """ This is a test function. """
+                y = x + 1
+                return y
+            f(1)
+            self.assertEqual(f['x'], 1)
+            self.assertEqual(f['y'], 2)
+            help(f)
+            
+    unittest.main()
+    
