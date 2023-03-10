@@ -3,7 +3,7 @@ import os
 import re
 import msvcrt
 import time
-from .latex import subst
+from IPython.core.completer import IPCompleter
 
 
 getch = msvcrt.getwch
@@ -56,9 +56,8 @@ def resetbuffer():
 
 
 def read(end='\r\n'):
-    """Reads the input; supports writing LaTeX symbols by typing a tab
-    at the end of a string beginning with a backslash.
-    """
+    """ Reads the input; supports writing LaTeX symbols by typing a tab
+    at the end of a string beginning with a backslash. """
     assert end in spaces
     global backslash
 
@@ -174,3 +173,71 @@ class BracketTracker:
             elif c in self.close_pars:
                 self.pop(c)
         return self.stk[-1][1] + 1 if self.stk else 0
+
+
+extra_mappings = {
+    '\\sum': '\\Sigma',
+    '\\prod': '\\Pi',
+    '\\/\\': '\\land',
+    '\\\\/': '\\lor',
+    '\\->': '\\rightarrow',
+    '\\<-': '\\leftarrow',
+    '\\=>': '\\Rightarrow',
+    '\\<=': '\\Leftarrow',
+    '\\*': '\\times',
+    '\\i': 'ⅈ',
+    '\\e': 'ℯ',
+    '\\inf': '\\infty',
+    '\\ga': '\\alpha',
+    '\\gb': '\\beta',
+    '\\gd': '\\delta',
+    '\\ge': '\\epsilon',
+    '\\gg': '\\gamma',
+    '\\gi': '\\iota',
+    '\\gk': '\\kappa',
+    '\\gl': '\\lambda',
+    '\\go': '\\omega',
+    '\\gs': '\\sigma',
+    '\\gu': '\\upsilon',
+    '\\deg': '°',
+    '\\ang': '∠',
+    '\\dee': '∂',
+    '\\E': '\\exists',
+    '\\A': '\\forall',
+    '\\grin': '😁',
+    '\\haha': '😂',
+    '\\smile': '🙂',
+    '\\lol': '🤣',
+    '\\fire': '🔥',
+    '\\cow': '🐮',
+    '\\monkey': '🐒',
+    '\\horse': '🐴',
+    '\\tree': '🌲',
+    '\\cake': '🍰',
+    '\\red': '🟥',
+    '\\green': '🟩',
+    '\\blue': '🟦',
+}
+
+
+def subst(s):
+    """Substitute escaped characters."""
+    s = extra_mappings.get(s, s)
+    # return symbols.get(s, s)
+    _, matches = IPCompleter.latex_matches(None, s)
+    return matches[0] if len(matches) == 1 else s
+
+
+while True:
+    try:
+        line = input('>>> ')
+    except KeyboardInterrupt:
+        write('\n')
+        break
+    except IOError as e:
+        write(str(e) + '\n')
+        continue
+    if line:
+        write(line + '\n')
+    if line == 'exit':
+        break

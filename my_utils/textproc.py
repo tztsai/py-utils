@@ -1,5 +1,6 @@
-from itertools import chain
 import os, re
+from cmd import Cmd
+from itertools import chain
 
 
 usage = """Usage:
@@ -34,8 +35,9 @@ w/w!: write the file (with a '!', there will be no confirmation)
 """
 
 
-class Text:
+class Text: #(Cmd):
     def __init__(self, file_name):
+        super().__init__()
         self.filename = file_name
         file = open(file_name, 'r', encoding='utf8')
         lines = [l[:-1] if l[-1] in '\r\n' else l for l in file.readlines()]

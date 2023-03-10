@@ -1,24 +1,12 @@
-# flake8: noqa
-# mypy: ignore-errors
-
-# stdlib
-import argparse
-import ast
-import importlib
-import inspect
 import io
-import os
 import re
-import runpy
-import shutil
-import sys
-from collections.abc import Callable, Iterator
-from itertools import islice, product
+import ast
+import inspect
 from numbers import *
-from typing import Any, Optional, Union
+from importlib import import_module
+from itertools import islice, product
+from typing import Any, Optional, Union, Callable, Iterator
 
-# third party
-import cloudpickle
 
 TYPE_MAP = {  # maps of type annotations
     Integral: int,
@@ -26,11 +14,6 @@ TYPE_MAP = {  # maps of type annotations
     Complex: complex,
     object: Any,
 }
-
-# MOD_MAP = {  # maps module names to their common aliases
-#     'numpy': 'np',
-#     'pandas': 'pd'
-# }
 
 
 def get_type(x):
@@ -107,16 +90,20 @@ def get_type(x):
     return type(x)
 
 
-def get_suptypes(t):
+def get_suptypes(t, type_map=None):
+    """
+    Examples:
+    >>> get_suptypes(int)
+    """
     def suptypes_of_subscripted_type(t):
         T = t.__origin__
         args = t.__args__
-        sts = [
-            T[ts]
-            for ts in product(*map(get_suptypes, args))
-            if not all(t in (object, ...) for t in ts)
-        ]
-        return sts + get_suptypes(T)
+        sts = [T[ts] for ts in 
+               product(*[get_suptypes(t, type_map) for t in args])
+               if not (T is Union and object in ts)
+               if not (T is tuple and set(ts) == {object, ...})
+               if not all(t is object for t in ts)]
+        return sts + get_suptypes(T, type_map)
 
     if inspect.isclass(t) and issubclass(t, type):
         sts = list(t.__mro__)
@@ -124,15 +111,21 @@ def get_suptypes(t):
         sts = suptypes_of_subscripted_type(t)
     elif isinstance(t, type):
         sts = list(t.mro())
-    elif t == Ellipsis:
+    elif t in (Ellipsis, None):
         sts = [t]
-    else:  # None, Callable, Iterator, etc.
+    elif t in (Optional, Union):
+        sts = [object]
+    else:  # Callable, Iterator, etc.
         sts = [t, object]
+        
+    if type_map:
+        sts = [type_map.get(t, t) for t in sts]
     return sts
 
 
 def get_common_suptype(ts, type_map=None):
-    """Find the most specific common supertype of a collection of types."""
+    """ Find the most specific common supertype of a collection of types. """
+    
     ts = set(ts)
     assert ts, "empty collection of types"
 
@@ -142,35 +135,38 @@ def get_common_suptype(ts, type_map=None):
     if not ts:
         return None
 
-    sts = [get_suptypes(t) for t in ts]
+    sts = [get_suptypes(t, type_map) for t in ts]
     for t in min(sts, key=len):
         if all(t in ts for ts in sts):
             break
     else:
         return Any
 
-    if type_map:
-        t = type_map.get(t, t)
     if optional:
         t = Optional[t]
     return t
 
 
-def test():
-    def get_anno(xs):
-        return get_common_suptype(map(get_type, xs))
-
-    recs = [
-        [None, 1, 1.2],
-        [{1: 2}, {1: 2.2}, {1: 2.1, 3: 4}],
-        [(x for x in range(10)), iter(range(10))],
-    ]
-    for xs in recs:
-        print(get_anno(xs))
+# for testing only
+def get_annotation(values):
+    """ Get the type annotation from a list of values. """
+    return get_common_suptype(map(get_type, values), type_map=TYPE_MAP)
 
 
-def get_full_name(x, global_vars={}):
-    """
+def get_type_annotations(type_records):
+    def recurse(x):
+        if isinstance(x, dict):
+            return {k: recurse(v) for k, v in x.items()}
+        elif isinstance(x, list):
+            return get_common_suptype(x, type_map=TYPE_MAP)
+        else:
+            raise TypeError(f"unexpected type: {type(x)}")
+    return recurse(type_records)
+
+
+def get_full_name(x, global_vars: dict = {}):
+    """ Get the full name of a type. `global_vars` is a dict {object_id: name}.
+    
     Examples:
     >>> import numpy as np
     >>> G = lambda: {id(v): k for k, v in globals().items() if k[0] != '_'}
@@ -193,10 +189,11 @@ def get_full_name(x, global_vars={}):
         return "..."
     if x is None:
         return "None"
-    if id(x) in global_vars:
-        return global_vars[id(x)]
     if x.__module__ == "builtins":
         return x.__name__
+    if id(x) in global_vars:
+        return global_vars[id(x)]
+    
     # handle the subscripted types
     if hasattr(x, "__origin__"):
         T, args = x.__origin__, x.__args__
@@ -205,21 +202,22 @@ def get_full_name(x, global_vars={}):
         T = get_full_name(T, global_vars)
         args = ", ".join(get_full_name(a, global_vars) for a in args)
         return f"{T}[{args}]"
+    
     # find the module alias
     names = (f"{x.__module__}.{get_name(x)}").split(".")[::-1]
-    mods = [importlib.import_module(names[-1])]
-    print(names)
+    mods = [import_module(names[-1])]
     for name in names[-2::-1]:
-        print(name, mods[-1])
         mods.append(getattr(mods[-1], name))
     mods = mods[::-1]
+    
     # find the first module that is imported
     for i, (name, mod) in enumerate(zip(names, mods)):
         if id(mod) in global_vars:
             names = names[:i] + [global_vars[id(mod)]]
             mods = mods[: i + 1]
             break
-    # skip useless intermediate modules
+        
+    # remove unnecessary intermediate modules
     for k in range(1, len(names)):
         if k >= len(names) - 1:
             break
@@ -230,99 +228,8 @@ def get_full_name(x, global_vars={}):
                 names = names[: i + 1] + names[-k:]
                 mods = mods[: i + 1] + mods[-k:]
                 break
+
     return ".".join(names[::-1])
-
-
-def profiler(frame, event, arg):
-    if event in ("call", "return"):
-        filename = os.path.abspath(frame.f_code.co_filename)
-        funcname = frame.f_code.co_name
-        if filename.endswith(".py") and funcname[0] != "<" and CWD in filename:
-            recs = TYPE_RECS.setdefault(filename, {})
-            if "globals" not in recs:
-                recs["globals", None] = {
-                    id(v): k for k, v in frame.f_globals.items() if k[0] != "_"
-                }
-            if event == "call":
-                # print(filename, funcname, frame.f_lineno, frame.f_locals)
-                arg_types = {var: get_type(val) for var, val in frame.f_locals.items()}
-                lineno = frame.f_lineno
-            else:
-                arg_types = {"return": get_type(arg)}
-                #! assumes no nested function has the same name as the outer function
-                lineno = max(
-                    ln for ln, fn in recs if fn == funcname and ln <= frame.f_lineno
-                )
-            rec = recs.setdefault((lineno, funcname), {})
-            for k, v in arg_types.items():
-                rec.setdefault(k, []).append(v)
-    return profiler
-
-
-# *** run the script N times to collect type records ***
-
-parser = argparse.ArgumentParser()
-parser.add_argument("script", help="the script to run")
-parser.add_argument("-n", type=int, default=1, help="number of times to run the script")
-parser.add_argument("-v", "--verbose", action="store_true")
-parser.add_argument(
-    "-i", action="store_true", help="prompt before overwriting each script"
-)
-parser.add_argument(
-    "--log", default="type_records.pkl", help="output file for type records"
-)
-parser.add_argument("--cwd", default=None, help="working directory")
-parser.add_argument(
-    "--backup", action="store_true", help="backup the scripts before annotating them"
-)
-
-ARGS = parser.parse_args()
-DIR = os.path.dirname(os.path.abspath(ARGS.script))
-CWD = ARGS.cwd or DIR
-
-try:
-    TYPE_RECS = cloudpickle.load(open(ARGS.log, "rb"))
-except:
-    TYPE_RECS = {}  # {filename: {(lineno, funcname): {argname: [type]}}}}
-
-sys.path.extend([DIR, CWD])
-sys.setprofile(profiler)
-
-for _ in range(ARGS.n):
-    runpy.run_path(sys.argv[1], run_name="__main__")
-
-sys.setprofile(None)
-
-with open(ARGS.log, "wb") as f:
-    cloudpickle.dump(TYPE_RECS, f)
-
-
-# *** determine the type annotations from the type records ***
-
-
-def get_type_annotations(type_records=TYPE_RECS):
-    def recurse(x):
-        if isinstance(x, dict):
-            return {k: recurse(v) for k, v in x.items()}
-        elif isinstance(x, list):
-            return get_common_suptype(x, type_map=TYPE_MAP)
-        else:
-            return x
-
-    return recurse(type_records)
-
-
-annotations = get_type_annotations()
-
-# if ARGS.verbose:
-#     for path, recs in annotations.items():
-#         print(path)
-#         for (lineno, funcname), arg_types in recs.items():
-#             print(f'  {funcname} (Ln{lineno}):')
-#             print('    ' + ', '.join(f'{k}: {get_full_name(v)}' for k, v in arg_types.items()))
-
-
-# *** write the type annotations to the script ***
 
 
 def find_defs_in_ast(tree):
@@ -331,21 +238,25 @@ def find_defs_in_ast(tree):
             yield node
         for child in ast.iter_child_nodes(node):
             yield from recurse(child)
-
     return list(recurse(tree))
 
 
 def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
+    """ Change the annotations of a ast.FunctionDef node in-place.
+    Return True if the node is changed. """
+
     key = (def_node.lineno, def_node.name)
     if key not in annotations:
         return False  # no type records for this function
     annos = annotations[key]
+    global_vars = annotations["globals", None]
+    
     A = def_node.args
     all_args = A.posonlyargs + A.args + A.kwonlyargs
     defaults = dict(zip(A.args + A.kwonlyargs, A.defaults + A.kw_defaults))
     all_args.extend(filter(None, [A.vararg, A.kwarg]))
+    
     changed = False
-    global_vars = annotations["globals", None]
     for a in all_args:
         if a.annotation is None and a.arg != "self":
             t = annos[a.arg]
@@ -372,58 +283,53 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
             anno = get_full_name(t, global_vars)
             a.annotation = ast.Name(anno)
             changed = True
+
     if def_node.returns is None:
-        if "return" not in annos:
-            print("No return type for", key, annos)
-            exit()
         anno = get_full_name(annos["return"], global_vars)
         def_node.returns = ast.Name(anno)
         def_node.returns.lineno = max(a.lineno for a in all_args)
+        # default to the same line as the last arg
         changed = True
+        
     return changed
 
 
-def annotate_script(filepath, verbose=ARGS.verbose):
+def annotate_script(filepath, annotations, verbose=False) -> str:
+    """ Output the annotated version of the script at `filepath`. """
+    
     s = open(filepath, encoding="utf8").read()
     lines = s.splitlines()
-    defs = [
-        d
-        for d in find_defs_in_ast(ast.parse(s))
-        if annotate_def(d, annotations[filepath])
-    ]
+    
+    # find all function definitions and annotate them in-place
+    defs = [d for d in find_defs_in_ast(ast.parse(s))
+            if annotate_def(d, annotations)]
+    
     if not defs:
         return None
+    
     if verbose:
         print("Adding annotations to", filepath, "\n")
+        
     starts, ends, sigs = [], [], []
     for node in defs:
         ln0, ln1 = node.lineno, node.body[0].lineno
         starts.append(ln0 - 1)
         ends.append(ln1 - 1)
         node.body = []  # only keep signature
-        line = re.match(r"\s*", lines[ln0 - 1])[0] + ast.unparse(
-            node
-        )  # keep indentation
+        indent = re.match(r"\s*", lines[ln0 - 1])[0]
+        line = indent + ast.unparse(node)
         sigs.append(line)
         if verbose:
             print("Old:", *lines[ln0 - 1 : ln1 - 1], sep="\n")
-            print(">" * 50)
+            print(">" * 80)
             print("New:", sigs[-1], sep="\n")
-            print("-" * 50)
+            print("-" * 80)
+    
+    # insert the new signatures
     new_lines = []
     for s, e, sig in zip([None] + ends, starts + [None], sigs + [None]):
         new_lines.extend(lines[s:e])
         if sig is not None:
             new_lines.append(sig)
+            
     return "\n".join(new_lines)
-
-
-for path in annotations:
-    s = annotate_script(path)
-    if s is None:
-        continue
-    if ARGS.backup:
-        shutil.copy(path, path + ".bak")
-    if not ARGS.i or input(f"Overwrite {path}?").lower() == "y":
-        with open(path, "w", encoding="utf8") as f:
-            f.write(s)

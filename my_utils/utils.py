@@ -60,18 +60,18 @@ def binding(**kwds):
         
 
 @contextlib.contextmanager
-def jump_if(condition, lineno):
+def jump_if(condition, dline):
     #! Does it work?
     def tracer(frame, event, arg):
         if event == 'call':
             if condition():
-                frame.f_lineno = lineno
+                frame.f_lineno += dline
     if condition:
         frame = sys._getframe(1)
         breakpoint()
         sys.settrace(tracer)
         try:
-            frame.f_lineno = lineno
+            frame.f_lineno += dline
             yield
         finally:
             sys.settrace(None)
@@ -148,7 +148,7 @@ if __name__ == '__main__':
     class TestJumpIf(unittest.TestCase):
         def test_jump_to(self):
             def abs_(x):
-                x < 0 and with_jumps(2)
+                jump_if(x < 0, 2)
                 return x
                 return -x
             self.assertEqual(abs_(1), 1)
