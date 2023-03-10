@@ -61,14 +61,15 @@ def binding(**kwds):
 
 @contextlib.contextmanager
 def jump_if(condition, lineno):
-    # def tracer(frame, event, arg):
-    #     if event == 'call':
-    #         if condition():
-    #             frame.f_lineno = lineno
+    #! Does it work?
+    def tracer(frame, event, arg):
+        if event == 'call':
+            if condition():
+                frame.f_lineno = lineno
     if condition:
         frame = sys._getframe(1)
         breakpoint()
-        sys.settrace(jump_if)
+        sys.settrace(tracer)
         try:
             frame.f_lineno = lineno
             yield
@@ -77,6 +78,19 @@ def jump_if(condition, lineno):
     yield
     
 
+def all_attrs(obj, _visited=None):
+    if _visited is None:
+        _visited = set()
+    _visited.add(id(obj))
+    return dict(
+        (a, all_attrs(v, _visited))
+        for a in dir(obj)
+        if not a.startswith('_')
+        for v in [getattr(obj, a)]
+        if id(v) not in _visited and not callable(v)
+    ) or obj
+
+    
 def pmap(f, lst, jobs=None):
     if jobs is None:
         jobs = os.cpu_count()
