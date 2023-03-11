@@ -1,28 +1,33 @@
 # %%
+import numpy as np
 import ast
 from operator import *
+from copy import deepcopy
 from inspect import Signature, Parameter
 from typing import Union, Any
 
 ID = Union[str, int]
 
+
 class MakeSome(type):
     """Metaclass for Some class"""
+
     def __getattribute__(self, __name: str) -> "Some":
         try:
             return super().__getattribute__(__name)
         except:
             return self(__name)
 
+
 class SomeArgs:
     def __init__(self, pos_args: frozenset["Some"], key_args: frozenset["Some"]):
         self.poses = pos_args
         self.keys = key_args
         self._make_signature()
-    
+
     def merge(self, other: "SomeArgs") -> "SomeArgs":
         return SomeArgs(self.poses | other.poses, self.keys | other.keys)
-    
+
     def _make_signature(self):
         n = len(self.poses) and max(int(k[1:] or 0) for k in self.poses) + 1
         self._signature = Signature(
@@ -40,29 +45,77 @@ class SomeArgs:
             binds[f'${k}'] = v
         return binds
 
+
 class SomeExpr:
     def __init__(self, body: ast.expr, args: SomeArgs):
         self._body = body
         self._args = args
+        self._tree = to_dict(body)
         self._repr = ast.unparse(body)
 
     def __bool__(self) -> bool:
-        #! no way to include if-else, and, or, and not?
+        #! cannot include if-else, and, or, and not?
         return True
-    
+
     def __getattr__(self, name: str) -> "SomeExpr":
         return SomeExpr(ast.Attribute(self._body, name), self._args)
-    
+
     def __getitem__(self, key: Any) -> "SomeExpr":
-        return SomeExpr(ast.Subscript(self._body, ast.Constant(key)), self._args)
-    
+        if isinstance(key, SomeExpr):
+            args = self._args.merge(key._args)
+            key = key._body
+        else:
+            args = self._args
+            key = ast.Constant(key)
+        return SomeExpr(ast.Subscript(self._body, key), args)
+
     def __call__(self, *args: Any, **kwds: Any) -> Any:
-        binds = self._args.bind(*args, **kwds)
-        return eval_somebody(self._body, binds)
+        lsa, lskw = list(args), list(kwds.items())
         
+        expr_args = []
+        for i, a in enumerate(lsa):
+            if isinstance(a, SomeExpr):
+                expr_args.append(a)
+                lsa[i] = a._body
+        for i, (k, a) in enumerate(lskw):
+            if isinstance(a, SomeExpr):
+                expr_args.append(a)
+                lskw[i] = ast.keyword(k, a._body)
+
+        if len(expr_args) > 0 or isinstance(self._body, ast.Attribute):
+            args = self._args
+            for a in expr_args:
+                args = args.merge(a._args)
+            for i, a in enumerate(lsa):
+                if not isinstance(a, ast.expr):
+                    lsa[i] = ast.Constant(a)
+            for i, (k, a) in enumerate(lskw):
+                if not isinstance(a, ast.expr):
+                    lskw[i] = ast.keyword(k, ast.Constant(a))
+            body = ast.Call(self._body, lsa, lskw)
+            return SomeExpr(body, args)
+        
+        binds = self._args.bind(*args, **dict(kwds))
+        return eval_somebody(self._body, binds)
+    
+    def __matmul__(self, other: Any) -> "SomeExpr":
+        if isinstance(other, SomeExpr):
+            other = other,
+        if isinstance(other, tuple):
+            binds = self._args.bind(*[a._body for a in other])
+            body = deepcopy(self._body)
+            body = eval_somebody(body, binds, keep_expr=True)
+            args = other[0]._args
+            for exp in other[1:]:
+                args = args.merge(exp._args)
+            return SomeExpr(body, args)
+        else:
+            raise TypeError("unsupported operand type(s) for @: 'SomeExpr' and 'Any'")
+
     def __repr__(self) -> str:
         return self._repr
-    
+
+
 class Some(SomeExpr, metaclass=MakeSome):
     def __init__(self, id: ID):
         sym = "$" if id == 0 else f'${id}'
@@ -78,15 +131,22 @@ class Some(SomeExpr, metaclass=MakeSome):
 
     def __hash__(self) -> int:
         return self._id
-    
-def eval_somebody(body: ast.expr, args: dict) -> Any:
-    if isinstance(body, ast.Constant):
-        return body.value
-    elif isinstance(body, ast.Name):
+
+
+# TODO: use ast.NodeVisitor
+def eval_somebody(body: ast.expr, args: dict, keep_expr=False) -> Any:
+    if isinstance(body, ast.Name):
         try:
             return args[body.id]
         except:
             raise NameError(f"Name {body.id} is not defined")
+    elif keep_expr:
+        for a, v in vars(body).items():
+            if isinstance(v, ast.expr):
+                setattr(body, a, eval_somebody(v, args, keep_expr))
+        return body
+    elif isinstance(body, ast.Constant):
+        return body.value
     elif isinstance(body, ast.BinOp):
         left = eval_somebody(body.left, args)
         right = eval_somebody(body.right, args)
@@ -108,9 +168,22 @@ def eval_somebody(body: ast.expr, args: dict) -> Any:
         obj = eval_somebody(body.value, args)
         slc = eval_somebody(body.slice, args)
         return obj[slc]
+    elif isinstance(body, ast.Call):
+        f = eval_somebody(body.func, args)
+        args = [eval_somebody(a, args) for a in body.args]
+        kwds = {k: eval_somebody(v, args) for k, v in body.keywords}
+        return f(*args, **kwds)
     else:
-        print(body)
-        raise NotImplementedError(f"eval_somebody does not support {type(body)}")
+        raise NotImplementedError(
+            f"eval_somebody does not support {body}")
+        
+def to_dict(n):
+    if isinstance(n, (list, tuple)):
+        return type(n)([to_dict(x) for x in n])
+    if hasattr(n, '__dict__'):
+        return {k: to_dict(v) for k, v in vars(n).items()}
+    return n
+
 
 # %%
 OP2FUNC = {
@@ -121,7 +194,7 @@ OP2FUNC = {
     'FloorDiv': floordiv,
     'Mod': mod,
     'Pow': pow,
-    'MatMult': matmul,
+    # 'MatMult': matmul,
     'LShift': lshift,
     'RShift': rshift,
     'BitOr': or_,
@@ -146,7 +219,7 @@ METHOD2OP = {
     '__floordiv__': ('BinOp', 'FloorDiv'),
     '__mod__': ('BinOp', 'Mod'),
     '__pow__': ('BinOp', 'Pow'),
-    '__matmul__': ('BinOp', 'MatMult'),
+    # '__matmul__': ('BinOp', 'MatMult'),
     '__lshift__': ('BinOp', 'LShift'),
     '__rshift__': ('BinOp', 'RShift'),
     '__or__': ('BinOp', 'BitOr'),
@@ -165,7 +238,7 @@ METHOD2OP = {
 
 def register(cls, method: str, optype: str, op: str):
     op = getattr(ast, op)()
-    
+
     if optype == 'BinOp':
         def call(self, other: Any, r=False) -> "SomeExpr":
             left = self._body
@@ -179,16 +252,16 @@ def register(cls, method: str, optype: str, op: str):
                 left, right = right, left
             body = ast.BinOp(left, op, right)
             return SomeExpr(body, args)
-        
+
         rmethod = '__r' + method[2:]
-        rcall = lambda self, other: call(self, other, r=True)
+        def rcall(self, other): return call(self, other, r=True)
         setattr(cls, rmethod, rcall)
 
     elif optype == 'UnaryOp':
         def call(self) -> "SomeExpr":
             body = ast.UnaryOp(op, self._body)
             return SomeExpr(body, self._args)
-        
+
     elif optype == 'Compare':
         def call(self, other: Any) -> "SomeExpr":
             if isinstance(other, SomeExpr):
@@ -201,8 +274,9 @@ def register(cls, method: str, optype: str, op: str):
             return SomeExpr(body, args)
         
     else:
-        raise ValueError(f"optype must be 'BinOp', 'UnaryOp', or 'Compare', not {optype}")
-    
+        raise ValueError(
+            f"optype must be 'BinOp', 'UnaryOp', or 'Compare', not {optype}")
+
     setattr(cls, method, call)
 
 for method, (optype, op) in METHOD2OP.items():
@@ -244,9 +318,16 @@ g
 g(1, 2, x=4)
 
 # %%
-import numpy as np
-h = some[:, 0] + some1.T
+h = some.reshape(3, 2)[:2] + some1.T[[1, 2]]
 h(np.array([[1, 2, 3], [4, 5, 6]]),
   np.array([[1, 2, 3], [4, 5, 6]]))
+
+# %%
+f
+
+# %%
+g = some ** 2
+h = f @ g
+h
 
 # %%
