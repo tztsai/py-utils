@@ -8,9 +8,11 @@ ID = Union[str, int]
 
 class MakeSome(type):
     """Metaclass for Some class"""
-    # def __getattribute__(self, __name: str) -> "Some":
-    #     print(self)
-    #     return self(__name)
+    def __getattribute__(self, __name: str) -> "Some":
+        try:
+            return super().__getattribute__(__name)
+        except:
+            return self(__name)
 
 class SomeArgs:
     def __init__(self, pos_args: frozenset["Some"], key_args: frozenset["Some"]):
@@ -30,7 +32,6 @@ class SomeArgs:
              for a in self.keys])
 
     def bind(self, *args: Any, **kwds: Any) -> dict:
-        print(self._signature, args)
         binds = self._signature.bind(*args, **kwds).arguments
         for k in list(binds.keys()):
             v = binds.pop(k)
@@ -45,49 +46,6 @@ class SomeExpr:
         self._args = args
         self._repr = ast.unparse(body)
 
-    @classmethod
-    def register(cls, method: str, optype: str, op: str):
-        op = getattr(ast, op)()
-        
-        if optype == 'BinOp':
-            def call(self, other: Any, r=False) -> "SomeExpr":
-                left = self._body
-                if isinstance(other, SomeExpr):
-                    args = self._args.merge(other._args)
-                    right = other._body
-                else:
-                    args = self._args
-                    right = ast.Constant(other)
-                if r:  # reverse order
-                    left, right = right, left
-                body = ast.BinOp(left, op, right)
-                return SomeExpr(body, args)
-            
-            rmethod = '__r' + method[2:]
-            rcall = lambda self, other: call(self, other, r=True)
-            setattr(cls, rmethod, rcall)
-
-        elif optype == 'UnaryOp':
-            def call(self) -> "SomeExpr":
-                body = ast.UnaryOp(op, self._body)
-                return SomeExpr(body, self._args)
-            
-        elif optype == 'Compare':
-            def call(self, other: Any) -> "SomeExpr":
-                if isinstance(other, SomeExpr):
-                    args = self._args.merge(other._args)
-                    other = other._body
-                else:
-                    args = self._args
-                    other = ast.Constant(other)
-                body = ast.Compare(self._body, [op], [other])
-                return SomeExpr(body, args)
-            
-        else:
-            raise ValueError(f"optype must be 'BinOp', 'UnaryOp', or 'Compare', not {optype}")
-        
-        setattr(cls, method, call)
-    
     def __bool__(self) -> bool:
         #! no way to include if-else, and, or, and not?
         return True
@@ -205,34 +163,90 @@ METHOD2OP = {
     '__ge__': ('Compare', 'GtE'),
 }
 
+def register(cls, method: str, optype: str, op: str):
+    op = getattr(ast, op)()
+    
+    if optype == 'BinOp':
+        def call(self, other: Any, r=False) -> "SomeExpr":
+            left = self._body
+            if isinstance(other, SomeExpr):
+                args = self._args.merge(other._args)
+                right = other._body
+            else:
+                args = self._args
+                right = ast.Constant(other)
+            if r:  # reverse order
+                left, right = right, left
+            body = ast.BinOp(left, op, right)
+            return SomeExpr(body, args)
+        
+        rmethod = '__r' + method[2:]
+        rcall = lambda self, other: call(self, other, r=True)
+        setattr(cls, rmethod, rcall)
+
+    elif optype == 'UnaryOp':
+        def call(self) -> "SomeExpr":
+            body = ast.UnaryOp(op, self._body)
+            return SomeExpr(body, self._args)
+        
+    elif optype == 'Compare':
+        def call(self, other: Any) -> "SomeExpr":
+            if isinstance(other, SomeExpr):
+                args = self._args.merge(other._args)
+                other = other._body
+            else:
+                args = self._args
+                other = ast.Constant(other)
+            body = ast.Compare(self._body, [op], [other])
+            return SomeExpr(body, args)
+        
+    else:
+        raise ValueError(f"optype must be 'BinOp', 'UnaryOp', or 'Compare', not {optype}")
+    
+    setattr(cls, method, call)
+
 for method, (optype, op) in METHOD2OP.items():
-    SomeExpr.register(method, optype, op)
+    register(SomeExpr, method, optype, op)
 
 # %%
 some = Some(0)
 some1 = Some(1)
 some2 = Some(2)
 some3 = Some(3)
-some_x = Some('x')
-some_y = Some('y')
-some_z = Some('z')
+some_x = Some.x
+some_y = Some.y
+some_z = Some.z
 
 # %%
-f = some1 + some2
+{some_x, Some('x')}
+
+# %%
+f = some * 2 + 1
 f
 
 # %%
-f(1, 2, 3)
+f(3)
 
 # %%
-g = some * f + some_x
-g(1, 2, 3, x=4)
+(some1 + some2)(1, 2, 3)
+
+# %%
+list(map(some + some1, [1, 2, 3], [4, 5, 6]))
+
+# %%
+list(filter(some % 2, [1, 2, 3, 4, 5]))
+
+# %%
+g = some1 * f + some_x
+g
+
+# %%
+g(1, 2, x=4)
 
 # %%
 import numpy as np
-h = some[:, 0] + some1.T @ some2.reshape(2, 2)
+h = some[:, 0] + some1.T
 h(np.array([[1, 2, 3], [4, 5, 6]]),
-  np.array([[1, 2, 3], [4, 5, 6]]),
-  np.array([1, 2, 3, 4]))
+  np.array([[1, 2, 3], [4, 5, 6]]))
 
 # %%
