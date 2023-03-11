@@ -262,7 +262,6 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
     key = (get_def_lineno(def_node), def_node.name)
     
     if key not in annotations:
-        print(vars(def_node))
         return False  # no type records for this function
     
     annos = annotations[key]
