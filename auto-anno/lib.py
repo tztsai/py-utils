@@ -5,7 +5,8 @@ import inspect
 from numbers import *
 from importlib import import_module
 from itertools import islice, product
-from typing import Any, Optional, Union, Callable, Iterator
+from typing import Any, Optional, Union
+from collections.abc import Callable, Iterator
 
 
 TYPE_MAP = {  # maps of type annotations
@@ -19,41 +20,43 @@ TYPE_MAP = {  # maps of type annotations
 def get_type(x):
     """
     Examples:
-    >>> get_type(None)
-    >>> get_type([])
+    >>> f = lambda x: print(get_full_name(get_type(x)))
+    >>> f(None)
+    None
+    >>> f([])
     list
-    >>> get_type([1, 2, 3])
-    list[int]
-    >>> get_type([1, 'a'])
+    >>> f([1, 2, 3])
+    list[Integral]
+    >>> f([1, 'a'])
     list
-    >>> get_type(dict(a=0.9, b=0.1))
-    dict[str, float]
-    >>> get_type(dict(a=0.9, b='a'))
-    dict[str, typing.Any]
-    >>> get_type({1, 2.0, None})
-    set[typing.Optional[float]]
-    >>> get_type(str)
+    >>> f(dict(a=0.9, b=0.1))
+    dict[str, Real]
+    >>> f(dict(a=0.9, b='a'))
+    dict[str, object]
+    >>> f({1, 2.0, None})
+    set[Optional[Real]]
+    >>> f(str)
     type
-    >>> get_type(True)
+    >>> f(True)
     bool
-    >>> get_type((1, 2.0))
-    tuple[int, float]
-    >>> get_type(tuple(range(9)))
-    tuple[int, ...]
-    >>> get_type(iter(range(9)))
-    typing.Iterator[int]
-    >>> get_type((i if i % 2 else None for i in range(9)))
-    typing.Iterator[typing.Optional[int]]
+    >>> f((1, 2.0))
+    tuple[Integral, Real]
+    >>> f(tuple(range(9)))
+    tuple[Integral, ...]
+    >>> f(iter(range(9)))
+    Iterator[Integral]
+    >>> f((i if i % 2 else None for i in range(9)))
+    Iterator[Optional[Integral]]
     """
 
-    def dispatch(T, *xs, maxlen=5):
+    def dispatch(T, *xs, maxlen=4):
         xs = [list(map(get_type, l)) for l in xs]
         if not xs or min(map(len, xs)) == 0:  # empty collection
             return T
         ts = tuple(map(get_common_suptype, xs))
         if len(ts) == 1:
             t = ts[0]
-        elif len(ts) > maxlen:
+        elif len(ts) > maxlen:  # use [t, ...] for long tuples
             t = get_common_suptype(ts)
         else:
             t = ts
@@ -72,7 +75,7 @@ def get_type(x):
         if isinstance(x, t):
             return dispatch(t, x)
     if isinstance(x, tuple):
-        return dispatch(tuple, *[[a] for a in x], maxlen=4)
+        return dispatch(tuple, *[[a] for a in x])
     if isinstance(x, dict):
         return dispatch(dict, x.keys(), x.values())
     if isinstance(x, io.IOBase):
@@ -90,11 +93,9 @@ def get_type(x):
     return type(x)
 
 
-def get_suptypes(t, type_map=None):
-    """
-    Examples:
-    >>> get_suptypes(int)
-    """
+def get_suptypes(t, type_map: Optional[dict]=None):
+    """ Get all supertypes of a type. """
+    
     def suptypes_of_subscripted_type(t):
         T = t.__origin__
         args = t.__args__
@@ -105,19 +106,20 @@ def get_suptypes(t, type_map=None):
                if not all(t is object for t in ts)]
         return sts + get_suptypes(T, type_map)
 
-    if inspect.isclass(t) and issubclass(t, type):
-        sts = list(t.__mro__)
-    elif hasattr(t, "__origin__") and hasattr(t, "__args__"):
+    if hasattr(t, "__origin__"):
         sts = suptypes_of_subscripted_type(t)
-    elif isinstance(t, type):
-        sts = list(t.mro())
+    elif inspect.isclass(t):
+        if issubclass(t, type):
+            sts = list(t.__mro__)
+        else:
+            sts = list(t.mro())
     elif t in (Ellipsis, None):
         sts = [t]
     elif t in (Optional, Union):
         sts = [object]
-    else:  # Callable, Iterator, etc.
-        sts = [t, object]
-        
+    else:
+        raise TypeError(f"unsupported type: {t}")
+
     if type_map:
         sts = [type_map.get(t, t) for t in sts]
     return sts
@@ -164,7 +166,7 @@ def get_type_annotations(type_records):
     return recurse(type_records)
 
 
-def get_full_name(x, global_vars: dict = {}):
+def get_full_name(x, global_vars: Optional[dict]=None):
     """ Get the full name of a type. `global_vars` is a dict of {object_id: name}.
     
     Examples:
@@ -192,8 +194,11 @@ def get_full_name(x, global_vars: dict = {}):
         return "..."
     if x is None:
         return "None"
-    if x.__module__ == "builtins":
-        return x.__name__
+    
+    if global_vars is None:
+        gs = inspect.currentframe().f_back.f_globals.items()
+        global_vars = {id(v): k for k, v in gs if k[0] != '_'}
+
     if id(x) in global_vars:
         return global_vars[id(x)]
     
@@ -205,6 +210,10 @@ def get_full_name(x, global_vars: dict = {}):
         T = get_full_name(T, global_vars)
         args = ", ".join(get_full_name(a, global_vars) for a in args)
         return f"{T}[{args}]"
+    
+    # handle the built-in types
+    if x.__module__ == "builtins":
+        return x.__name__
     
     # find the module names
     names = (f"{x.__module__}.{get_name(x)}").split(".")[::-1]
@@ -219,7 +228,7 @@ def get_full_name(x, global_vars: dict = {}):
             names = names[:i] + [global_vars[id(mod)]]
             mods = mods[: i + 1]
             break
-
+        
     # remove unnecessary intermediate modules
     for k in range(1, len(names)):
         if k >= len(names) - 1:
@@ -245,6 +254,7 @@ def find_defs_in_ast(tree):
 
 
 def find_imports_in_ast(tree: ast.Module):
+    # only "import from" statements at the global level
     for node in tree.body:
         if isinstance(node, ast.ImportFrom):
             yield node
@@ -278,35 +288,36 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
     
     changed = False
     for a in all_args:
-        if a.annotation is None and a.arg != "self":
-            t = annos[a.arg]
-            if a == A.vararg:
-                if t is tuple:
-                    t = Any
-                else:
-                    assert t.__origin__ is tuple
-                    if (
-                        len(t.__args__) == 1
-                        or len(t.__args__) == 2
-                        and t.__args__[1] is Ellipsis
-                    ):
-                        t = t.__args__[0]
-                    else:
-                        t = get_common_suptype(t.__args__)
-            elif a == A.kwarg:
-                if t is dict:
-                    t = Any
-                else:
-                    assert t.__origin__ is dict
-                    t = t.__args__[1]
-            if t is None:
+        if a.annotation or a.arg == "self":
+            continue
+        t = annos[a.arg]
+        if a == A.vararg:
+            if t is tuple:
                 t = Any
-            default = defaults.get(a.arg, False)
-            if isinstance(default, ast.NameConstant) and default.value is None:
-                t = Optional[t]
-            anno = get_full_name(t, global_vars)
-            a.annotation = ast.Name(anno)
-            changed = True
+            else:
+                assert t.__origin__ is tuple
+                if (  # tuple[t] or tuple[t, ...]
+                    len(t.__args__) == 1
+                    or len(t.__args__) == 2
+                    and t.__args__[1] is Ellipsis
+                ):
+                    t = t.__args__[0]
+                else:
+                    t = get_common_suptype(t.__args__)
+        elif a == A.kwarg:
+            if t is dict:
+                t = Any
+            else:
+                assert t.__origin__ is dict
+                t = t.__args__[1]
+        if t is None:
+            t = Any
+        default = defaults.get(a.arg, ...)
+        if isinstance(default, ast.NameConstant):
+            t = get_common_suptype([t, get_type(default.value)])
+        anno = get_full_name(t, global_vars)
+        a.annotation = ast.Name(anno)
+        changed = True
 
     if def_node.returns is None:
         anno = get_full_name(annos["return"], global_vars)
@@ -331,9 +342,17 @@ def annotate_script(filepath, annotations, verbose=False) -> str:
             if annotate_def(d, annotations)]
     
     imps = list(find_imports_in_ast(tree))
-    if imps and not any(imp.module == "typing" for imp in imps):
-        lines.insert(imps[0].lineno - 1,
-                     "from typing import Any, Union, Optional, Callable, Iterator")
+    required_imports = {
+        'typing': 'Any Union Optional'.split(),
+        'collections.abc': 'Iterator Callable'.split(),
+    }
+    for imp in imps:
+        if imp.module in required_imports:
+            for name in required_imports.pop(imp.module):
+                if name not in imp.names:
+                    imp.names.append(ast.alias(name))
+            lines[imp.lineno-1:imp.end_lineno] = '\n'
+            lines[imp.lineno-1] = ast.unparse(imp)
     
     if not defs:
         return None
@@ -362,5 +381,14 @@ def annotate_script(filepath, annotations, verbose=False) -> str:
         new_lines.extend(lines[s:e])
         if sig is not None:
             new_lines.append(sig)
-            
+
+    # insert the new imports
+    for mod, names in required_imports.items():
+        lines.insert(0, f"from {mod} import {', '.join(names)}")
+
     return "\n".join(new_lines)
+
+
+if __name__ == "__main__":
+    import doctest
+    doctest.testmod()
