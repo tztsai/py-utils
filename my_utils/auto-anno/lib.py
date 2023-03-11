@@ -160,7 +160,7 @@ def get_type_annotations(type_records):
         elif isinstance(x, list):
             return get_common_suptype(x, type_map=TYPE_MAP)
         else:
-            raise TypeError(f"unexpected type: {type(x)}")
+            return x
     return recurse(type_records)
 
 
@@ -238,7 +238,15 @@ def find_defs_in_ast(tree):
             yield node
         for child in ast.iter_child_nodes(node):
             yield from recurse(child)
-    return list(recurse(tree))
+    yield from recurse(tree)
+
+
+def find_imports_in_ast(tree: ast.Module):
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            yield node
+        # elif isinstance(node, ast.Import):
+        #     yield node
 
 
 def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
@@ -287,7 +295,8 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
     if def_node.returns is None:
         anno = get_full_name(annos["return"], global_vars)
         def_node.returns = ast.Name(anno)
-        def_node.returns.lineno = max(a.lineno for a in all_args)
+        def_node.returns.lineno = (max(a.lineno for a in all_args)
+                                   if all_args else def_node.lineno)
         # default to the same line as the last arg
         changed = True
         
@@ -299,10 +308,16 @@ def annotate_script(filepath, annotations, verbose=False) -> str:
     
     s = open(filepath, encoding="utf8").read()
     lines = s.splitlines()
+    tree = ast.parse(s)
     
     # find all function definitions and annotate them in-place
-    defs = [d for d in find_defs_in_ast(ast.parse(s))
+    defs = [d for d in find_defs_in_ast(tree)
             if annotate_def(d, annotations)]
+    
+    imps = list(find_imports_in_ast(tree))
+    if not any(imp.module == "typing" for imp in imps):
+        lines.insert(imps[0].lineno - 1,
+                     "from typing import Any, Union, Optional, Callable, Iterator")
     
     if not defs:
         return None
