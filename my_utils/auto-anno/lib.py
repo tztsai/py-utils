@@ -249,13 +249,22 @@ def find_imports_in_ast(tree: ast.Module):
         #     yield node
 
 
+def get_def_lineno(def_node: ast.FunctionDef):
+    if def_node.decorator_list:
+        return def_node.decorator_list[0].lineno
+    return def_node.lineno
+
+
 def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
     """ Change the annotations of a ast.FunctionDef node in-place.
     Return True if the node is changed. """
 
-    key = (def_node.lineno, def_node.name)
+    key = (get_def_lineno(def_node), def_node.name)
+    
     if key not in annotations:
+        print(vars(def_node))
         return False  # no type records for this function
+    
     annos = annotations[key]
     global_vars = annotations["globals", None]
     
@@ -327,12 +336,12 @@ def annotate_script(filepath, annotations, verbose=False) -> str:
         
     starts, ends, sigs = [], [], []
     for node in defs:
-        ln0, ln1 = node.lineno, node.body[0].lineno
+        ln0, ln1 = get_def_lineno(node), node.body[0].lineno
         starts.append(ln0 - 1)
         ends.append(ln1 - 1)
         node.body = []  # only keep signature
         indent = re.match(r"\s*", lines[ln0 - 1])[0]
-        line = indent + ast.unparse(node)
+        line = indent + ast.unparse(node).replace("\n", "\n" + indent)
         sigs.append(line)
         if verbose:
             print("Old:", *lines[ln0 - 1 : ln1 - 1], sep="\n")

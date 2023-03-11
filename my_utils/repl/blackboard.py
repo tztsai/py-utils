@@ -104,7 +104,7 @@ def delete(n: int=1, track: int=1) -> None:
     write('\b' * n, track)
     
 
-def redo(n=1):
+def redo(n: int=1) -> None:
     for _ in range(n):
         if not record: break
         op, text = record.pop()
@@ -291,14 +291,14 @@ class BracketTracker:
     stack = []
 
     @classmethod
-    def push(cls, par, pos):
+    def push(cls: type, par: str, pos: int) -> None:
         if par in cls.open_pars:
             cls.stack.append((par, pos))
         else:
             raise SyntaxError('not an open bracket')
 
     @classmethod
-    def pop(cls, par):
+    def pop(cls: type, par: str) -> None:
         if cls.stack and cls.stack[-1][0] == cls.par_map[par]:
             cls.stack.pop()
         else:
@@ -306,7 +306,7 @@ class BracketTracker:
             raise SyntaxError('bad brackets')
 
     @classmethod
-    def next_insertion(cls, text):
+    def next_insertion(cls: type, text: str) -> int:
         "Track the brackets in the line and return the appropriate pooint of the nest insertion."
         for line in text.splitlines():
             for i, c in enumerate(line):
@@ -320,7 +320,12 @@ class BracketTracker:
 
 def repl() -> None:
     while True:
-        line = input()
+        try:
+            line = input()
+        except KeyboardInterrupt:
+            break
+        except IOError:
+            continue
         if line == 'exit': break
         write(line + '\n')
 
