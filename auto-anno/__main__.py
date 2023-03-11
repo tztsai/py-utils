@@ -67,13 +67,17 @@ def profiler(frame, event, arg):
             else:
                 arg_types = {"return": get_type(arg)}
                 #! assumes no nested function has the same name as the outer function
-                lineno = max(ln for ln, fn in recs 
+                lineno = max(ln for ln, fn in recs
                              if fn == funcname and ln <= frame.f_lineno)
 
             rec = get_record(recs, (lineno, funcname))
-            for k, v in arg_types.items():
-                get_record(rec, k, []).append(v)
-                
+            for k, t in arg_types.items():
+                arg_mod = type(arg).__module__
+                cur_mod = frame.f_globals['__name__']
+                if arg_mod in cur_mod:
+                    t = t.__name__  # forward reference (PEP 484)
+                get_record(rec, k, []).append(t)
+
     return profiler
 
 def get_record(recs, key, default=None):
@@ -86,7 +90,8 @@ def get_record(recs, key, default=None):
             return recs[key]
         except KeyError:
             os.remove(ARGS.log)
-            raise SystemExit('Files have been modified since the last run.')
+            raise SystemExit("Files have been modified since the last run. "
+                             "Removed previous log file.")
 
 
 sys.setprofile(profiler)
@@ -102,10 +107,8 @@ with open(ARGS.log, "wb") as f:
 
 # ** write the type annotations to the script **
 
-annotations = get_type_annotations(TYPE_RECS)
-
-for path in annotations:
-    s = annotate_script(path, annotations[path], ARGS.verbose)
+for path, recs in TYPE_RECS.items():
+    s = annotate_script(path, recs, ARGS.verbose)
     if s is None:
         continue
     if ARGS.backup:

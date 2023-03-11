@@ -1,11 +1,15 @@
 import io
 import re
 import ast
+import isort
+import black
 import inspect
 from numbers import *
+from functools import partial
 from importlib import import_module
 from itertools import islice, product
 from typing import Any, Optional, Union
+from collections import defaultdict
 from collections.abc import Callable, Iterator
 
 
@@ -15,6 +19,8 @@ TYPE_MAP = {  # maps of type annotations
     Complex: complex,
     object: Any,
 }
+
+REQ_IMPORTS = {Any, Optional, Union, Callable, Iterator}
 
 
 def get_type(x):
@@ -113,10 +119,12 @@ def get_suptypes(t, type_map: Optional[dict]=None):
             sts = list(t.__mro__)
         else:
             sts = list(t.mro())
-    elif t in (Ellipsis, None):
+    elif t in (Ellipsis, None, Any):
         sts = [t]
     elif t in (Optional, Union):
         sts = [object]
+    elif type(t) is str:  # used type name as annotation
+        sts = [t, object]
     else:
         raise TypeError(f"unsupported type: {t}")
 
@@ -155,17 +163,6 @@ def get_annotation(values):
     return get_common_suptype(map(get_type, values), type_map=TYPE_MAP)
 
 
-def get_type_annotations(type_records):
-    def recurse(x):
-        if isinstance(x, dict):
-            return {k: recurse(v) for k, v in x.items()}
-        elif isinstance(x, list):
-            return get_common_suptype(x, type_map=TYPE_MAP)
-        else:
-            return x
-    return recurse(type_records)
-
-
 def get_full_name(x, global_vars: Optional[dict]=None):
     """ Get the full name of a type. `global_vars` is a dict of {object_id: name}.
     
@@ -194,6 +191,10 @@ def get_full_name(x, global_vars: Optional[dict]=None):
         return "..."
     if x is None:
         return "None"
+    if type(x) is str:
+        return repr(x)
+    if x in REQ_IMPORTS:  # requires importing its module
+        return get_name(x)
     
     if global_vars is None:
         gs = inspect.currentframe().f_back.f_globals.items()
@@ -268,17 +269,17 @@ def get_def_lineno(def_node: ast.FunctionDef):
     return def_node.lineno
 
 
-def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
+def annotate_def(def_node: ast.FunctionDef, type_records) -> bool:
     """ Change the annotations of a ast.FunctionDef node in-place.
     Return True if the node is changed. """
 
     key = (get_def_lineno(def_node), def_node.name)
     
-    if key not in annotations:
+    if key not in type_records:
         return False  # no type records for this function
     
-    annos = annotations[key]
-    global_vars = annotations["globals", None]
+    records = type_records[key]
+    global_vars = type_records["globals", None]
     
     A = def_node.args
     all_args = A.posonlyargs + A.args + A.kwonlyargs
@@ -286,11 +287,13 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
                         reversed(A.defaults + A.kw_defaults)))
     all_args.extend(filter(None, [A.vararg, A.kwarg]))
     
+    union = partial(get_common_suptype, type_map=TYPE_MAP)
+    
     changed = False
     for a in all_args:
         if a.annotation or a.arg == "self":
             continue
-        t = annos[a.arg]
+        t = union(records[a.arg])
         if a == A.vararg:
             if t is tuple:
                 t = Any
@@ -303,7 +306,7 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
                 ):
                     t = t.__args__[0]
                 else:
-                    t = get_common_suptype(t.__args__)
+                    t = union(t.__args__)
         elif a == A.kwarg:
             if t is dict:
                 t = Any
@@ -314,13 +317,14 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
             t = Any
         default = defaults.get(a.arg, ...)
         if isinstance(default, ast.NameConstant):
-            t = get_common_suptype([t, get_type(default.value)])
+            t = union([t, get_type(default.value)])
         anno = get_full_name(t, global_vars)
         a.annotation = ast.Name(anno)
         changed = True
 
     if def_node.returns is None:
-        anno = get_full_name(annos["return"], global_vars)
+        t = union(records["return"])
+        anno = get_full_name(t, global_vars)
         def_node.returns = ast.Name(anno)
         def_node.returns.lineno = (max(a.lineno for a in all_args)
                                    if all_args else def_node.lineno)
@@ -330,32 +334,39 @@ def annotate_def(def_node: ast.FunctionDef, annotations) -> bool:
     return changed
 
 
-def annotate_script(filepath, annotations, verbose=False) -> str:
+def annotate_script(filepath, type_records, verbose=False) -> str:
     """ Output the annotated version of the script at `filepath`. """
     
     s = open(filepath, encoding="utf8").read()
     lines = s.splitlines()
     tree = ast.parse(s)
     
-    # find all function definitions and annotate them in-place
+    # annotate function definitions in-place and find the changed ones
     defs = [d for d in find_defs_in_ast(tree)
-            if annotate_def(d, annotations)]
-    
-    imps = list(find_imports_in_ast(tree))
-    required_imports = {
-        'typing': 'Any Union Optional'.split(),
-        'collections.abc': 'Iterator Callable'.split(),
-    }
-    for imp in imps:
-        if imp.module in required_imports:
-            for name in required_imports.pop(imp.module):
-                if name not in imp.names:
-                    imp.names.append(ast.alias(name))
-            lines[imp.lineno-1:imp.end_lineno] = '\n'
-            lines[imp.lineno-1] = ast.unparse(imp)
+            if annotate_def(d, type_records)]
     
     if not defs:
         return None
+    
+    # find all imports in the script
+    imps = list(find_imports_in_ast(tree))
+    
+    # find all required imports
+    required_imports = defaultdict(list)
+    for t in REQ_IMPORTS:
+        mod = t.__module__
+        name = getattr(t, "__name__", getattr(t, "_name", None))
+        required_imports[mod].append(name)
+    
+    # # append missing names in imported modules
+    # for imp in imps:
+    #     if imp.module in required_imports:
+    #         imp_names = set(a.name for a in imp.names)
+    #         for name in required_imports.pop(imp.module):
+    #             if name not in imp_names:
+    #                 imp.names.append(ast.alias(name))
+    #         lines[imp.lineno-1:imp.end_lineno] = '\n'
+    #         lines[imp.lineno-1] = ast.unparse(imp)
     
     if verbose:
         print("Adding annotations to", filepath, "\n")
@@ -382,11 +393,15 @@ def annotate_script(filepath, annotations, verbose=False) -> str:
         if sig is not None:
             new_lines.append(sig)
 
-    # insert the new imports
+    # insert missing imports
     for mod, names in required_imports.items():
-        lines.insert(0, f"from {mod} import {', '.join(names)}")
+        new_lines.insert(0, f"from {mod} import {', '.join(names)}")
 
-    return "\n".join(new_lines)
+    # reformat new script
+    new_script = "\n".join(new_lines)
+    new_script = isort.code(new_script)
+    new_script = black.format_str(new_script, mode=black.Mode())
+    return new_script
 
 
 if __name__ == "__main__":
