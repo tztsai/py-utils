@@ -165,7 +165,7 @@ def get_type_annotations(type_records):
 
 
 def get_full_name(x, global_vars: dict = {}):
-    """ Get the full name of a type. `global_vars` is a dict {object_id: name}.
+    """ Get the full name of a type. `global_vars` is a dict of {object_id: name}.
     
     Examples:
     >>> import numpy as np
@@ -175,9 +175,12 @@ def get_full_name(x, global_vars: dict = {}):
     >>> import scipy as sp
     >>> get_full_name(sp.sparse.csr_matrix, G())
     'sp.sparse.csr_matrix'
-    >>> import scipy.sparse as sps
+    >>> import scipy.sparse as sparse
     >>> get_full_name(sparse.csr_matrix, G())
-    'sps.csr_matrix'
+    'sparse.csr_matrix'
+    >>> from typing import Optional
+    >>> get_full_name(tuple[np.ndarray, Optional[np.ndarray]], G())
+    'tuple[np.ndarray, Optional[np.ndarray]]'
     """
 
     def get_name(x):
