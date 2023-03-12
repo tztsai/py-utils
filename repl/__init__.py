@@ -1,1 +1,1 @@
-from .blackboard import repl, input, read, write
+from .repl import repl, input, read, write

@@ -5,7 +5,9 @@ import unittest
 import signal
 import code
 import contextlib
+from icecream import ic
 from multiprocessing import Pool
+from functools import wraps
 
 
 def interact(msg=None):
@@ -40,7 +42,8 @@ def interact(msg=None):
 
 @contextlib.contextmanager
 def binding(**kwds):
-    "Bind global variables within a context; revert to old values on exit."
+    """Bind variables within a context; revert to old values on exit."""
+            
     old_binds = {}
     new_binds = {}
     G = globals()
@@ -59,24 +62,54 @@ def binding(**kwds):
         G.update(old_binds)
         
 
-@contextlib.contextmanager
-def jump_if(condition, dline):
-    #! Does it work?
-    def tracer(frame, event, arg):
-        if event == 'call':
-            if condition():
-                frame.f_lineno += dline
-    if condition:
-        frame = sys._getframe(1)
-        breakpoint()
-        sys.settrace(tracer)
-        try:
-            frame.f_lineno += dline
-            yield
-        finally:
-            sys.settrace(None)
-    yield
+# @contextlib.contextmanager
+# def jump_if(condition, jump_lines):
+#     #! Does it work?
+#     def tracer(frame, event, arg):
+#         # print(event, frame.f_lineno, arg)
+#         ic(event, frame.f_locals, frame.f_lineno, arg)
+#         if event == 'line':
+#             if condition():
+#                 ic()
+#                 frame.f_lineno += jump_lines
+#                 ic(frame.f_lineno)
+#         return tracer
+#     sys.settrace(tracer)
+#     yield
+#     sys.settrace(None)
+
     
+class JumpIf:
+    def __init__(self, condition, jump_lines):
+        self.condition = condition
+        self.jump_lines = jump_lines
+
+    def tracer(self, frame, event, arg):
+        if event == 'line':
+            try:
+                assert eval(self.condition, frame.f_locals)
+                ic('meet', self.condition, frame.f_lineno)
+                frame.f_lineno += self.jump_lines
+                ic('jump', self.jump_lines, 'lines to', frame.f_lineno)
+                # return sys.settrace(self._old_tracer)
+            except:
+                pass
+        return self.tracer
+    
+    def __enter__(self):
+        self._old_tracer = sys.gettrace()
+        sys.settrace(self.tracer)
+        
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.settrace(self._old_tracer)
+        
+    def __call__(self, func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+        return wrapper
+
 
 def all_attrs(obj, _visited=None):
     if _visited is None:
@@ -143,16 +176,23 @@ class IsInstance:
         return lambda *args: all(isinstance(arg, types)
                                  for arg in args)
 
-
+    
 if __name__ == '__main__':
+
+    @JumpIf('x % 2', 2)
+    def f(x):
+        x *= 2
+        x -= 1
+        x += 3
+        x //= 2
+        x -= 2
+        return x
+
     class TestJumpIf(unittest.TestCase):
         def test_jump_to(self):
-            def abs_(x):
-                jump_if(x < 0, 2)
-                return x
-                return -x
-            self.assertEqual(abs_(1), 1)
-            self.assertEqual(abs_(-1), 1)
+            ic(f(1))
+            ic(f(0))
+            ic(f(-1))
     
     unittest.main()
     

@@ -292,9 +292,6 @@ some_y = Some.y
 some_z = Some.z
 
 # %%
-{some_x, Some('x')}
-
-# %%
 f = some * 2 + 1
 f
 
@@ -303,6 +300,9 @@ f(3)
 
 # %%
 (some1 + some2)(1, 2, 3)
+
+# %%
+{some_x, Some('x')}
 
 # %%
 list(map(some + some1, [1, 2, 3], [4, 5, 6]))
@@ -323,11 +323,12 @@ h(np.array([[1, 2, 3], [4, 5, 6]]),
   np.array([[1, 2, 3], [4, 5, 6]]))
 
 # %%
-f
-
-# %%
+print(f)
 g = some ** 2
+print(g)
 h = f @ g
-h
+print(h)
+print(h @ f)
+h(3)
 
 # %%

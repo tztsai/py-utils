@@ -12,7 +12,7 @@ class UTIL:
     from IPython.core.interactiveshell import InteractiveShell as Shell
     
     loglevel = debug.INFO  #DEBUG-1
-    transform_input = True
+    transform_input = False
     _shell = get_ipython()
     _ipy_transform_cell = _shell.transform_cell
     _my_transform_cell = None

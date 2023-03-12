@@ -348,15 +348,15 @@ def annotate_script(filepath, type_records, verbose=False) -> str:
     if not defs:
         return None
     
-    # find all imports in the script
-    imps = list(find_imports_in_ast(tree))
-    
     # find all required imports
     required_imports = defaultdict(list)
     for t in REQ_IMPORTS:
         mod = t.__module__
         name = getattr(t, "__name__", getattr(t, "_name", None))
         required_imports[mod].append(name)
+    
+    # # find all imports in the script
+    # imps = list(find_imports_in_ast(tree))
     
     # # append missing names in imported modules
     # for imp in imps:

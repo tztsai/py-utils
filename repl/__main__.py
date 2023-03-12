@@ -1,2 +1,2 @@
-from .blackboard import repl
+from .repl import repl
 repl()
